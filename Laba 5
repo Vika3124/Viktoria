@@ -1,0 +1,112 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+import torch 
+import torch.nn as nn
+import torchvision
+import torchvision.transforms as transforms
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+# Трансформации изображений
+data_transforms = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+# Загрузка датасетов
+train_dataset = torchvision.datasets.ImageFolder(
+    root=r'C:\data_n\train',
+    transform=data_transforms
+)
+test_dataset = torchvision.datasets.ImageFolder(
+    root=r'C:\data_n\test',
+    transform=data_transforms
+)
+
+# Размер батча
+batch_size = 10
+
+# DataLoader с num_workers = 0 (без multiprocessing)
+train_loader = torch.utils.data.DataLoader(
+    train_dataset, batch_size=batch_size, shuffle=True, num_workers=0
+)
+test_loader = torch.utils.data.DataLoader(
+    test_dataset, batch_size=batch_size, shuffle=True, num_workers=0
+)
+
+# Автоматически получаем имена классов и их количество
+class_names = train_dataset.classes
+num_classes = len(class_names)
+
+# Загружаем предобученную модель AlexNet
+net = torchvision.models.alexnet(pretrained=True)
+
+# Замораживаем все веса
+for param in net.parameters():
+    param.requires_grad = False
+
+# Меняем последний слой классификатора
+new_classifier = net.classifier[:-1]
+new_classifier.add_module('fc', nn.Linear(4096, num_classes))
+net.classifier = new_classifier
+
+net = net.to(device)
+
+# Параметры обучения
+num_epochs = 10
+lossFn = nn.CrossEntropyLoss()
+optimizer = torch.optim.SGD(net.parameters(), lr=0.01)
+
+# Обучение модели
+t = time.time()
+save_loss = []
+
+for epoch in range(num_epochs):
+    for i, (images, labels) in enumerate(train_loader):
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # Прямой проход
+        outputs = net(images)
+        loss = lossFn(outputs, labels)
+
+        # Обратный проход
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        save_loss.append(loss.item())
+
+        if i % 10 == 0:
+            print(f'Эпоха {epoch+1}/{num_epochs}, Шаг {i}, Потери: {loss.item():.4f}')
+
+print(f"Обучение завершено за {time.time() - t:.2f} секунд")
+
+# Проверка модели на тестовых данных
+inputs, classes = next(iter(test_loader))
+inputs = inputs.to(device)
+
+with torch.no_grad():
+    pred = net(inputs)
+    _, pred_class = torch.max(pred.data, 1)
+
+for i, j in zip(inputs.cpu(), pred_class.cpu()):
+    img = i.numpy().transpose((1, 2, 0))
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    img = std * img + mean
+    img = np.clip(img, 0, 1)
+    
+    plt.imshow(img)
+    plt.title(class_names[j])
+    plt.axis('off')
+    plt.pause(2)
+
+plt.show()
